@@ -1,32 +1,30 @@
-name: Monitor SIPAC UFPB
+name: Monitor SIPAC UFPB (Telegram)
 
 on:
   schedule:
-    # Roda a cada 6 horas (ajuste conforme necessário)
-    # Sintaxe Cron: minuto hora dia mes dia_da_semana
-    - cron: '0 */6 * * *'
-  workflow_dispatch: # Permite rodar manualmente clicando num botão na aba Actions
+    - cron: '0 */4 * * *' # Roda a cada 4 horas
+  workflow_dispatch:
 
 jobs:
   check_sipac:
     runs-on: ubuntu-latest
 
     steps:
-      - name: Baixar código do repositório
+      - name: Checkout do Código
         uses: actions/checkout@v3
 
-      - name: Configurar Python
+      - name: Setup Python
         uses: actions/setup-python@v4
         with:
           python-version: '3.9'
 
-      - name: Instalar dependências
+      - name: Instalar Dependências
         run: |
           pip install -r requirements.txt
 
-      - name: Executar Script de Monitoramento
+      - name: Rodar Script
         env:
-          EMAIL_REMETENTE: ${{ secrets.EMAIL_REMETENTE }}
-          SENHA_REMETENTE: ${{ secrets.SENHA_REMETENTE }}
-          EMAIL_DESTINO: ${{ secrets.EMAIL_DESTINO }}
+          # AQUI MUDOU: Pegamos as chaves do Telegram
+          TELEGRAM_TOKEN: ${{ secrets.TELEGRAM_TOKEN }}
+          TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
         run: python main.py
