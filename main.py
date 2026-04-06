@@ -1,4 +1,5 @@
 import os
+import re
 import time
 import requests  # Nova biblioteca necessária para o Telegram
 from selenium import webdriver
@@ -16,6 +17,60 @@ TELEGRAM_CHAT_ID = os.environ.get("TELEGRAM_CHAT_ID")
 
 NOME_ALVO = "WADDINGTON FREITAS DA SILVA"
 URL_SIPAC = "https://sipac.ufpb.br/public/jsp/processos/consulta_processo.jsf"
+
+def extrair_campo_texto(texto_pagina, rotulo):
+    """Extrai valor de um campo textual no formato 'Rótulo: valor'."""
+    padrao = rf"{re.escape(rotulo)}\s*([^\n\r]+)"
+    match = re.search(padrao, texto_pagina, flags=re.IGNORECASE)
+    if not match:
+        return "Não informado"
+    return match.group(1).strip()
+
+def abrir_primeiro_processo(driver, wait):
+    """Abre o primeiro processo encontrado no resultado (ícone da lupa/link de detalhe)."""
+    seletores_lupa = [
+        "a[title*='Visualizar']",
+        "a[href*='detalhe']",
+        "a[href*='processo']",
+        "a[href*='consulta_processo']",
+        "a[onclick*='processo']",
+    ]
+
+    for seletor in seletores_lupa:
+        elementos = driver.find_elements(By.CSS_SELECTOR, seletor)
+        for elemento in elementos:
+            texto_ancora = (elemento.text or "").strip().lower()
+            title_ancora = (elemento.get_attribute("title") or "").strip().lower()
+            if "sistema integrado" in title_ancora:
+                continue
+
+            if title_ancora and "visualizar" not in title_ancora and texto_ancora:
+                continue
+
+            driver.execute_script("arguments[0].scrollIntoView({block: 'center'});", elemento)
+            elemento.click()
+            wait.until(EC.presence_of_element_located((By.TAG_NAME, "body")))
+            return True
+
+    return False
+
+def extrair_dados_essenciais(driver):
+    """Extrai dados essenciais da página de detalhes do processo."""
+    texto_pagina = driver.find_element(By.TAG_NAME, "body").text
+
+    dados = {
+        "numero": extrair_campo_texto(texto_pagina, "Processo:"),
+        "origem": extrair_campo_texto(texto_pagina, "Origem do Processo:"),
+        "data_autuacao": extrair_campo_texto(texto_pagina, "Data de Autuação:"),
+        "assunto": extrair_campo_texto(texto_pagina, "Assunto do Processo:"),
+        "assunto_detalhado": extrair_campo_texto(texto_pagina, "Assunto Detalhado:"),
+        "natureza": extrair_campo_texto(texto_pagina, "Natureza do Processo:"),
+        "unidade_origem": extrair_campo_texto(texto_pagina, "Unidade de Origem:"),
+        "status": extrair_campo_texto(texto_pagina, "Status:"),
+        "data_cadastro": extrair_campo_texto(texto_pagina, "Data de Cadastro:"),
+    }
+
+    return dados
 
 def enviar_telegram(mensagem):
     """Envia mensagem para o seu Telegram pessoal via API do Bot."""
@@ -75,10 +130,42 @@ def verificar_sipac():
             print("Nenhum processo encontrado.")
         else:
             print("!!! ALERTA: PROCESSO ENCONTRADO !!!")
+
+            dados_essenciais = None
+            if abrir_primeiro_processo(driver, wait):
+                time.sleep(2)
+                dados_essenciais = extrair_dados_essenciais(driver)
+
+            if dados_essenciais:
+                detalhes = (
+                    f"*Número:* `{dados_essenciais['numero']}`\n"
+                    f"*Origem:* {dados_essenciais['origem']}\n"
+                    f"*Status:* {dados_essenciais['status']}\n"
+                    f"*Data de Autuação:* {dados_essenciais['data_autuacao']}\n"
+                    f"*Data de Cadastro:* {dados_essenciais['data_cadastro']}\n"
+                    f"*Assunto:* {dados_essenciais['assunto']}\n"
+                    f"*Assunto Detalhado:* {dados_essenciais['assunto_detalhado']}\n"
+                    f"*Natureza:* {dados_essenciais['natureza']}\n"
+                    f"*Unidade de Origem:* {dados_essenciais['unidade_origem']}"
+                )
+            else:
+                numeros_processo = sorted(
+                    set(
+                        re.findall(r"\b\d{5}\.\d{6}/\d{4}-\d{2}\b", driver.page_source)
+                    )
+                )
+
+                if numeros_processo:
+                    detalhes = "*Número(s) do processo:*\n" + "\n".join(
+                        f"- `{numero}`" for numero in numeros_processo
+                    )
+                else:
+                    detalhes = "*Número(s) do processo:*\n- Número não identificado automaticamente"
             
             msg = (
                 f"🚨 *NOVO PROCESSO DETECTADO*\n\n"
                 f"O sistema encontrou um registro para: *{NOME_ALVO}*\n"
+                f"{detalhes}\n\n"
                 f"[Clique aqui para acessar o SIPAC]({URL_SIPAC})"
             )
             enviar_telegram(msg)
