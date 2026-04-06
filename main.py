@@ -15,7 +15,7 @@ from webdriver_manager.chrome import ChromeDriverManager
 TELEGRAM_TOKEN = os.environ.get("TELEGRAM_TOKEN")
 TELEGRAM_CHAT_ID = os.environ.get("TELEGRAM_CHAT_ID")
 
-NOME_ALVO = "WASHINGTON NASCIMENTO DA SILVA"
+NOME_ALVO = "WADDINGTON FREITAS DA SILVA"
 URL_SIPAC = "https://sipac.ufpb.br/public/jsp/processos/consulta_processo.jsf"
 
 def extrair_campo_texto(texto_pagina, rotulo):
