@@ -2,7 +2,7 @@ name: Monitor SIPAC UFPB (Telegram)
 
 on:
   schedule:
-    - cron: '0 */4 * * *' # Roda a cada 4 horas
+    - cron: '0 */1 * * *' # Roda a cada hora
   workflow_dispatch:
 
 jobs:
