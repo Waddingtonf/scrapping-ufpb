@@ -2,6 +2,7 @@ import os
 import re
 import time
 import requests  # Nova biblioteca necessária para o Telegram
+import json
 from selenium import webdriver
 from selenium.webdriver.chrome.service import Service
 from selenium.webdriver.common.by import By
@@ -17,6 +18,29 @@ TELEGRAM_CHAT_ID = os.environ.get("TELEGRAM_CHAT_ID")
 
 NOME_ALVO = "WADDINGTON FREITAS DA SILVA"
 URL_SIPAC = "https://sipac.ufpb.br/public/jsp/processos/consulta_processo.jsf"
+
+# --- PERSISTÊNCIA DE ESTADO ---
+STATE_FILE = "last_state.json"
+
+def carregar_ultimo_estado():
+    """Carrega o último estado salvo do arquivo JSON."""
+    if os.path.exists(STATE_FILE):
+        try:
+            with open(STATE_FILE, "r", encoding="utf-8") as f:
+                return json.load(f)
+        except Exception as e:
+            print(f"Erro ao ler arquivo de estado: {e}")
+    return None
+
+def salvar_estado(estado):
+    """Salva o estado atual no arquivo JSON."""
+    try:
+        with open(STATE_FILE, "w", encoding="utf-8") as f:
+            json.dump(estado, f, indent=4, ensure_ascii=False)
+        print("Novo estado salvo com sucesso.")
+    except Exception as e:
+        print(f"Erro ao salvar arquivo de estado: {e}")
+
 
 def extrair_campo_texto(texto_pagina, rotulo):
     """Extrai valor de um campo textual no formato 'Rótulo: valor'."""
@@ -72,6 +96,41 @@ def extrair_dados_essenciais(driver):
 
     return dados
 
+def extrair_documentos_da_pagina(driver):
+    """Extrai os documentos da tabela 'subListagem' na página de detalhes do processo."""
+    documentos = []
+    try:
+        tabelas = driver.find_elements(By.CSS_SELECTOR, "table.subListagem")
+        if not tabelas:
+            todas_tabelas = driver.find_elements(By.TAG_NAME, "table")
+            for t in todas_tabelas:
+                try:
+                    caption = t.find_element(By.TAG_NAME, "caption")
+                    if caption and "documentos" in caption.text.lower():
+                        tabelas = [t]
+                        break
+                except:
+                    continue
+
+        if tabelas:
+            tabela = tabelas[0]
+            linhas = tabela.find_elements(By.CSS_SELECTOR, "tbody tr")
+            for linha in linhas:
+                cols = linha.find_elements(By.TAG_NAME, "td")
+                if len(cols) >= 3:
+                    ordem = cols[0].text.strip()
+                    especie = cols[1].text.strip()
+                    data = cols[2].text.strip()
+                    if especie:
+                        documentos.append({
+                            "ordem": ordem,
+                            "especie": especie,
+                            "data": data
+                        })
+    except Exception as e:
+        print(f"Erro ao extrair documentos da página: {e}")
+    return documentos
+
 def enviar_telegram(mensagem):
     """Envia mensagem para o seu Telegram pessoal via API do Bot."""
     print(f"Enviando notificação via Telegram...")
@@ -94,6 +153,9 @@ def enviar_telegram(mensagem):
 
 def verificar_sipac():
     print("Iniciando verificação (Modo Headless)...")
+    
+    # Carrega o estado anterior
+    estado_anterior = carregar_ultimo_estado()
     
     chrome_options = Options()
     chrome_options.add_argument("--headless")
@@ -128,47 +190,90 @@ def verificar_sipac():
         # Lógica de detecção
         if "nenhum registro encontrado" in page_source or "nenhum processo encontrado" in page_source:
             print("Nenhum processo encontrado.")
+            estado_atual = {
+                "numero": None,
+                "status": "Nenhum processo encontrado",
+                "quantidade_documentos": 0,
+                "documentos": []
+            }
+            if estado_anterior != estado_atual:
+                print("Alteração detectada: Anteriormente havia processos e agora nenhum foi encontrado.")
+                salvar_estado(estado_atual)
         else:
             print("!!! ALERTA: PROCESSO ENCONTRADO !!!")
 
             dados_essenciais = None
+            documentos = []
             if abrir_primeiro_processo(driver, wait):
                 time.sleep(2)
                 dados_essenciais = extrair_dados_essenciais(driver)
+                documentos = extrair_documentos_da_pagina(driver)
 
             if dados_essenciais:
-                detalhes = (
-                    f"*Número:* `{dados_essenciais['numero']}`\n"
-                    f"*Origem:* {dados_essenciais['origem']}\n"
-                    f"*Status:* {dados_essenciais['status']}\n"
-                    f"*Data de Autuação:* {dados_essenciais['data_autuacao']}\n"
-                    f"*Data de Cadastro:* {dados_essenciais['data_cadastro']}\n"
-                    f"*Assunto:* {dados_essenciais['assunto']}\n"
-                    f"*Assunto Detalhado:* {dados_essenciais['assunto_detalhado']}\n"
-                    f"*Natureza:* {dados_essenciais['natureza']}\n"
-                    f"*Unidade de Origem:* {dados_essenciais['unidade_origem']}"
-                )
+                estado_atual = {
+                    "numero": dados_essenciais.get("numero"),
+                    "status": dados_essenciais.get("status"),
+                    "quantidade_documentos": len(documentos),
+                    "documentos": documentos
+                }
             else:
                 numeros_processo = sorted(
                     set(
                         re.findall(r"\b\d{5}\.\d{6}/\d{4}-\d{2}\b", driver.page_source)
                     )
                 )
+                estado_atual = {
+                    "numero": ", ".join(numeros_processo) if numeros_processo else "Não identificado",
+                    "status": "Encontrado na lista (sem detalhes)",
+                    "quantidade_documentos": 0,
+                    "documentos": []
+                }
 
-                if numeros_processo:
-                    detalhes = "*Número(s) do processo:*\n" + "\n".join(
-                        f"- `{numero}`" for numero in numeros_processo
+            # Compara se houve alteração em relação ao último estado
+            if estado_anterior != estado_atual:
+                print("Atualização detectada! Enviando notificação...")
+                
+                if dados_essenciais:
+                    if documentos:
+                        exibidos = documentos[:30]
+                        texto_docs = f"\n*Documentos ({len(documentos)}):*\n" + "\n".join(
+                            f"- {doc['ordem']}. {doc['especie']} ({doc['data']})" for doc in exibidos
+                        )
+                        if len(documentos) > 30:
+                            texto_docs += f"\n- ... e mais {len(documentos) - 30} documentos."
+                    else:
+                        texto_docs = "\n*Documentos:* Nenhum documento listado."
+
+                    detalhes = (
+                        f"*Número:* `{dados_essenciais['numero']}`\n"
+                        f"*Origem:* {dados_essenciais['origem']}\n"
+                        f"*Status:* {dados_essenciais['status']}\n"
+                        f"*Data de Autuação:* {dados_essenciais['data_autuacao']}\n"
+                        f"*Data de Cadastro:* {dados_essenciais['data_cadastro']}\n"
+                        f"*Assunto:* {dados_essenciais['assunto']}\n"
+                        f"*Assunto Detalhado:* {dados_essenciais['assunto_detalhado']}\n"
+                        f"*Natureza:* {dados_essenciais['natureza']}\n"
+                        f"*Unidade de Origem:* {dados_essenciais['unidade_origem']}"
+                        f"{texto_docs}"
                     )
                 else:
-                    detalhes = "*Número(s) do processo:*\n- Número não identificado automaticamente"
-            
-            msg = (
-                f"🚨 *NOVO PROCESSO DETECTADO*\n\n"
-                f"O sistema encontrou um registro para: *{NOME_ALVO}*\n"
-                f"{detalhes}\n\n"
-                f"[Clique aqui para acessar o SIPAC]({URL_SIPAC})"
-            )
-            enviar_telegram(msg)
+                    if numeros_processo:
+                        detalhes = "*Número(s) do processo:*\n" + "\n".join(
+                            f"- `{numero}`" for numero in numeros_processo
+                        )
+                    else:
+                        detalhes = "*Número(s) do processo:*\n- Número não identificado automaticamente"
+                
+                msg = (
+                    f"🚨 *ATUALIZAÇÃO DE PROCESSO DETECTADA*\n\n"
+                    f"O sistema encontrou novidades para: *{NOME_ALVO}*\n"
+                    f"{detalhes}\n\n"
+                    f"[Clique aqui para acessar o SIPAC]({URL_SIPAC})"
+                )
+                enviar_telegram(msg)
+                salvar_estado(estado_atual)
+            else:
+                print("Nenhuma alteração detectada desde a última verificação. Notificação ignorada.")
 
     except Exception as e:
         print(f"Erro fatal durante a execução: {e}")
