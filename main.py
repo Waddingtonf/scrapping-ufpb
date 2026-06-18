@@ -97,36 +97,77 @@ def extrair_dados_essenciais(driver):
     return dados
 
 def extrair_documentos_da_pagina(driver):
-    """Extrai os documentos da tabela 'subListagem' na página de detalhes do processo."""
+    """Extrai os documentos da página de detalhes do processo."""
     documentos = []
     try:
-        tabelas = driver.find_elements(By.CSS_SELECTOR, "table.subListagem")
-        if not tabelas:
-            todas_tabelas = driver.find_elements(By.TAG_NAME, "table")
+        todas_tabelas = driver.find_elements(By.TAG_NAME, "table")
+        tabela_documentos = None
+        
+        # 1. Tenta encontrar a tabela que possui a coluna "Espécie" nos headers (th)
+        for t in todas_tabelas:
+            try:
+                headers = [th.text.strip().lower() for th in t.find_elements(By.TAG_NAME, "th")]
+                if any("espécie" in h or "especie" in h for h in headers):
+                    tabela_documentos = t
+                    print("Tabela de documentos encontrada pelo header <th>.")
+                    break
+            except Exception:
+                continue
+
+        # 2. Se não encontrou por th, tenta encontrar por td da primeira linha da tabela
+        if not tabela_documentos:
             for t in todas_tabelas:
                 try:
-                    caption = t.find_element(By.TAG_NAME, "caption")
-                    if caption and "documentos" in caption.text.lower():
-                        tabelas = [t]
-                        break
-                except:
+                    tr_elements = t.find_elements(By.TAG_NAME, "tr")
+                    if tr_elements:
+                        primeira_linha = tr_elements[0]
+                        cols = [td.text.strip().lower() for td in primeira_linha.find_elements(By.TAG_NAME, "td")]
+                        if any("espécie" in c or "especie" in c for c in cols):
+                            tabela_documentos = t
+                            print("Tabela de documentos encontrada pela primeira linha de <td>.")
+                            break
+                except Exception:
                     continue
 
-        if tabelas:
-            tabela = tabelas[0]
-            linhas = tabela.find_elements(By.CSS_SELECTOR, "tbody tr")
+        # 3. Se não encontrou por headers, tenta por classes padrão (com filtro de texto)
+        if not tabela_documentos:
+            for classe in ["table.subListagem", "table.listagem", "table"]:
+                tabelas = driver.find_elements(By.CSS_SELECTOR, classe)
+                for t in tabelas:
+                    try:
+                        texto_t = t.text.lower()
+                        if "espécie" in texto_t or "especie" in texto_t or "documento" in texto_t:
+                            tabela_documentos = t
+                            print(f"Tabela de documentos encontrada pela classe ou filtro: {classe}")
+                            break
+                    except Exception:
+                        continue
+                if tabela_documentos:
+                    break
+
+        if tabela_documentos:
+            # Pega todas as linhas de tr de forma genérica (sem assumir tbody)
+            linhas = tabela_documentos.find_elements(By.TAG_NAME, "tr")
             for linha in linhas:
                 cols = linha.find_elements(By.TAG_NAME, "td")
                 if len(cols) >= 3:
                     ordem = cols[0].text.strip()
                     especie = cols[1].text.strip()
                     data = cols[2].text.strip()
-                    if especie:
+                    
+                    # Ignora se for cabeçalho
+                    if "ordem" in ordem.lower() or "espécie" in especie.lower() or "especie" in especie.lower():
+                        continue
+                        
+                    if especie and (ordem.isdigit() or (ordem and ordem[0].isdigit())):
                         documentos.append({
                             "ordem": ordem,
                             "especie": especie,
                             "data": data
                         })
+            print(f"Documentos extraídos com sucesso: {len(documentos)}")
+        else:
+            print("Não foi possível identificar a tabela de documentos na página.")
     except Exception as e:
         print(f"Erro ao extrair documentos da página: {e}")
     return documentos
