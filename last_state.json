@@ -1,12 +1,17 @@
 {
     "numero": "23074.057133/2026-52",
     "status": "ABERTO",
-    "quantidade_documentos": 1,
+    "quantidade_documentos": 2,
     "documentos": [
         {
             "ordem": "1",
             "especie": "EXTRATO",
             "data": "16/06/2026"
+        },
+        {
+            "ordem": "2",
+            "especie": "PORTARIA",
+            "data": "17/06/2026"
         }
     ]
 }
